@@ -1,63 +1,13 @@
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 from datasets import load_dataset
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 import evaluate
 import torch.utils.benchmark as benchmark
 import itertools
 import argparse
 
-class CNNDailyMailDataset(Dataset):
-    def __init__(self, dataset, split='test', transform=None):
-        """
-        Args:
-            dataset (DatasetDict): The Hugging Face dataset dictionary.
-            split (str): Which split of the dataset to use ('train', 'validation', 'test').
-            transform (callable, optional): Optional transform to be applied on a sample.
-        """
-        self.data = dataset[split]
-        self.transform = transform
-
-    def __len__(self):
-        """Returns the total number of samples in the dataset."""
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        """
-        Args:
-            idx (int): Index of the sample to fetch.
-
-        Returns:
-            sample (dict): A dictionary containing the article and summary.
-        """
-        article = self.data[idx]['article']
-        summary = self.data[idx]['highlights']
-        sample = {'article': article, 'summary': summary}
-
-        if self.transform:
-            sample = self.transform(sample)
-
-        return sample
-
-class Collater:
-    def __init__(self, tokenizer):
-        self.tokenizer = tokenizer
-
-    def __call__(self, batch):
-        articles = [item['article'] for item in batch]
-        summaries = ["summarize: " + item['summary'] for item in batch]
-
-        # Tokenize the articles and summaries
-        article_encodings = self.tokenizer(articles, padding=True, truncation=True, return_tensors='pt')
-        #summary_encodings = self.tokenizer(summaries, padding=True, truncation=True, return_tensors='pt')
-
-        return {
-            'input_ids': article_encodings['input_ids'],
-            "summaries": summaries,
-            #'attention_mask': article_encodings['attention_mask'],
-            #'summary_ids': summary_encodings['input_ids'],
-            #'summary_attention_mask': summary_encodings['attention_mask'],
-        }
+from data import CNNDailyMailDataset, Collater
 
 def main(args):
     # Load the wikitext-2-raw-v1 dataset
@@ -76,51 +26,60 @@ def main(args):
     print(test_dataset[0]['article'])
     print(test_dataset[0]['summary'])
 
-    tokenizer = T5Tokenizer.from_pretrained(args.model)
-    model = T5ForConditionalGeneration.from_pretrained(args.model, device_map="auto")
-    assistant_model = T5ForConditionalGeneration.from_pretrained(args.assistant_model, device_map="auto")
-
-    collator = Collater(tokenizer)
-
-    # Create a dataloader
-    test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=collator)
-
-    input_text = test_dataset[0]['article']
-    input_ids = tokenizer(input_text, return_tensors="pt").input_ids.to("cuda")
-
-    #outputs = model.generate(input_ids, assistant_model=assistant_model)
-    #decoded_output = tokenizer.decode(outputs[0])
-
     rouge = evaluate.load('rouge')
     predictions = []
     references = []
     benchmark_results = []
 
-    def forward(batch, enabled):
+    def forward(model, assistant_model, batch, enabled):
         inputs = batch["input_ids"].cuda()
         outputs = model.generate(inputs, assistant_model=assistant_model if enabled else None)
-        decoded_output = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        return decoded_output
+        return outputs
 
-    def forward_with_score(batch, enabled):
-        decoded_output = forward(batch, enabled)
+    def forward_with_score(model, assistant_model, batch, enabled):
+        outputs = forward(batch, enabled)
+        decoded_output = tokenizer.batch_decode(outputs, skip_special_tokens=True)
         predictions.append(decoded_output[0])
         references.append(batch['summaries'][0])
         return decoded_output
 
-    for (enabled,) in itertools.product([True, False]):
+    for (enabled, assistant_model_name, main_model_name, precision) in itertools.product(
+            [True, False],
+            ["google/flan-t5-small"],
+            ["google/flan-t5-base", "google/flan-t5-large", "google/flan-t5-xl"],
+            ["INT8", torch.bfloat16, torch.float16, torch.float32],
+        ):
+
+        sublabel = f"Main model: {main_model_name} Assistant model: {assistant_model_name} Precision: {precision}"
+
+        print(f"Testing: {sublabel}")
+
+        tokenizer = T5Tokenizer.from_pretrained(main_model_name)
+        if isinstance(precision, torch.dtype):
+            model = T5ForConditionalGeneration.from_pretrained(main_model_name, device_map="auto", torch_dtype= precision)
+            assistant_model = T5ForConditionalGeneration.from_pretrained(assistant_model_name, device_map="auto", torch_dtype=precision)
+        else:
+            model = T5ForConditionalGeneration.from_pretrained(main_model_name, device_map="auto", load_in_8bit=True)
+            assistant_model = T5ForConditionalGeneration.from_pretrained(assistant_model_name, device_map="auto", load_in_8bit=True)
+            
+
+        collator = Collater(tokenizer)
+
+        # Create a dataloader
+        test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=collator)
+        
         def profile():
             for i, batch in enumerate(test_dataloader):
                 if i % 10 == 0:
                     print("idx", i)
                 if i == args.num_gen:
                     break
-                decoded_output = forward(batch, enabled)
+                outputs = forward(model, assistant_model, batch, enabled)
     
         t = benchmark.Timer(
                         stmt='profile()',
                         label='Speculative Decoding',
-                        sub_label=f"",
+                        sub_label=sublabel,
                         globals=locals(),
                         description= f"Enabled: {enabled}",
                     ).blocked_autorange(min_run_time=5)
@@ -140,9 +99,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Argument parser for model options')
 
     # Add arguments
-    parser.add_argument('--model', type=str, default="google/flan-t5-base", help='Path or name of the main model')
-    parser.add_argument('--assistant_model', type=str, default="google/flan-t5-small", help='Path or name of the assistant model')
-    parser.add_argument('--precision', type=str, choices=['fp16', 'fp32'], default="fp32", help='Precision of the model')
+    #parser.add_argument('--model', type=str, default="google/flan-t5-base", help='Path or name of the main model')
+    #parser.add_argument('--assistant_model', type=str, default="google/flan-t5-small", help='Path or name of the assistant model')
+    #parser.add_argument('--precision', type=str, choices=['fp16', 'fp32'], default="fp32", help='Precision of the model')
     parser.add_argument('--num_gen', type=int, default=100, help="")
 
     args = parser.parse_args()
