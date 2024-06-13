@@ -1,0 +1,14 @@
+#!/bin/bash
+
+#SBATCH --job-name=myjob     ## job name
+#SBATCH -A CLASS-CS190295_GPU    ## Lab account to charge resources
+#SBATCH -p gpu                ## partition name
+#SBATCH --gres=gpu:V100:1
+#SBATCH --time 1-00:00:00     ## time limit (1 day)
+#SBATCH --error=logs/slurm-%J.err  ## error log file
+#SBATCH --output=logs/slurm-%J.out ## output log file
+
+module load miniconda3/4.12.0
+source ~/.bashrc
+conda activate specDecode
+python3 flant5.py
