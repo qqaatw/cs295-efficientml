@@ -1,0 +1,16 @@
+Hardware: RTX3070 with 8GB VRAM
+Launch Command: python flant5.py
+Note: This profiling result doesn't include the time decoding ids to plain-text.
+
+[---------------------------------------------------------- Speculative Decoding ---------------------------------------------------------]
+                                                                                                        |  Enabled: True  |  Enabled: False
+1 threads: --------------------------------------------------------------------------------------------------------------------------------
+      Main model: google/flan-t5-base Assistant model: google/flan-t5-small Precision: torch.bfloat16   |       14.8      |       10.5     
+      Main model: google/flan-t5-base Assistant model: google/flan-t5-small Precision: torch.float16    |       15.1      |       10.7     
+      Main model: google/flan-t5-base Assistant model: google/flan-t5-small Precision: torch.float32    |       14.1      |        9.8     
+      Main model: google/flan-t5-large Assistant model: google/flan-t5-small Precision: torch.bfloat16  |       20.6      |       20.1     
+      Main model: google/flan-t5-large Assistant model: google/flan-t5-small Precision: torch.float16   |       21.9      |       20.4     
+      Main model: google/flan-t5-large Assistant model: google/flan-t5-small Precision: torch.float32   |       21.4      |       21.0     
+      Main model: google/flan-t5-xl Assistant model: google/flan-t5-small Precision: torch.bfloat16     |      227.6      |      397.7     
+      Main model: google/flan-t5-xl Assistant model: google/flan-t5-small Precision: torch.float16      |      245.3      |      449.7     
+      Main model: google/flan-t5-xl Assistant model: google/flan-t5-small Precision: torch.float32      |      433.7      |      783.7     
